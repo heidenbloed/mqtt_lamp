@@ -1,24 +1,15 @@
-#include <FS.h>
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
-#include <ArduinoJson.h>
 #include <DNSServer.h>
 #include <ESP8266WebServer.h>
 #include <WiFiManager.h>
 #include <WString.h>
 #include <Adafruit_NeoPixel.h>
-// #include "RunningMedian.h"
 #include <RotaryEncoder.h>
-#include "secret_defaults.h"
-
-char mqtt_server_address[100];
-char mqtt_id[100];
-char mqtt_username[100];
-char mqtt_password[100];
-char mqtt_topic_root[100];
+#include "secrets.h"
 
 const int leds_pin = D5;
-const int switch_pin = D1;
+const int switch_pin = D8;
 const int rotary_encoder_pin1 = D7;
 const int rotary_encoder_pin2 = D6;
 
@@ -28,10 +19,6 @@ char mqtt_topic_flash[100];
 char mqtt_topic_progress[100];
 char mqtt_topic_control[100];
 char mqtt_topic_log[100];
-
-const int mqtt_server_port = 1883;
-
-bool shouldSaveConfig = false;
 
 static unsigned long last_connection_attempt = 0;
 bool connected = false;
@@ -104,12 +91,7 @@ Adafruit_NeoPixel pixels = Adafruit_NeoPixel(num_pixels, leds_pin, NEO_GRB + NEO
 
 RotaryEncoder rot_encoder(rotary_encoder_pin1, rotary_encoder_pin2);
 
-DeserializationError read_config_file(DynamicJsonDocument json);
-boolean write_config_file(DynamicJsonDocument config_json);
-boolean change_single_config_value(char *key, int value);
-void write_default_config();
-void setup_wifi_and_parameters();
-void saveConfigCallback();
+void setup_wifi();
 void blink(int blinkCount, bool lamp_blink);
 void init_mode_change(int new_mode);
 void init_color_change(int new_color);
@@ -139,22 +121,22 @@ void ICACHE_RAM_ATTR switch_triggered()
 
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(9600);
 
-  pinMode(BUILTIN_LED, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
   pinMode(leds_pin, OUTPUT);
   pinMode(switch_pin, INPUT_PULLUP);
   pinMode(rotary_encoder_pin1, INPUT);
   pinMode(rotary_encoder_pin2, INPUT);
 
-  digitalWrite(BUILTIN_LED, LOW);
+  digitalWrite(LED_BUILTIN, LOW);
   pixels.begin();
   setError(false);
   blink(5, true);
 
   calcRainbowColors();
 
-  setup_wifi_and_parameters();
+  setup_wifi();
 
   client.setServer(mqtt_server_address, mqtt_server_port);
   client.setCallback(mqtt_callback);
@@ -162,192 +144,6 @@ void setup()
   rot_encoder.setPosition(0);
 
   // attachInterrupt(digitalPinToInterrupt(switch_pin), switch_triggered, FALLING);
-
-  blink(2, true);
-
-  // write_default_config();
-  // while(true) delay(1000);
-}
-
-DeserializationError read_config_file(DynamicJsonDocument json)
-{
-  Serial.println("Try to mount file system to read config parameters");
-  if (SPIFFS.begin())
-  {
-    Serial.println("Successfully mounted file system");
-    if (SPIFFS.exists("/config.json"))
-    {
-      Serial.println("Reading config file");
-      File configFile = SPIFFS.open("/config.json", "r");
-      if (configFile)
-      {
-        Serial.println("Opened config.json");
-        size_t size = configFile.size();
-        std::unique_ptr<char[]> buf(new char[size]);
-        configFile.readBytes(buf.get(), size);
-        // DynamicJsonBuffer jsonBuffer;
-        // return jsonBuffer.parseObject(buf.get());
-        return deserializeJson(json, buf.get());
-        /*JsonObject& json = jsonBuffer.parseObject(buf.get());
-        json.printTo(Serial);
-        Serial.println();
-        return json;*/
-      }
-    }
-  }
-  else
-  {
-    Serial.println("Failed to mount FS");
-  }
-  return DeserializationError::InvalidInput;
-}
-
-boolean write_config_file(DynamicJsonDocument config_json)
-{
-  Serial.println("Try to saving config");
-
-  Serial.print("Write: ");
-  serializeJson(config_json, Serial);
-  Serial.println();
-
-  if (SPIFFS.begin())
-  {
-    File configFile = SPIFFS.open("/config.json", "w");
-    if (!configFile)
-    {
-      Serial.println("Failed to open config.json for writing");
-    }
-    else
-    {
-      serializeJson(config_json, configFile);
-      configFile.close();
-      Serial.println("Successfully saved config");
-      return true;
-    }
-  }
-
-  Serial.println("Failed to save config");
-  return false;
-}
-
-boolean change_single_config_value(char *key, int value)
-{
-  DynamicJsonDocument config_json(1024);
-  DeserializationError error = read_config_file(config_json);
-  if (!error)
-  {
-    config_json[key] = value;
-    return write_config_file(config_json);
-  }
-  else
-  {
-    Serial.println("Failed to load config.json");
-  }
-  return false;
-}
-
-void write_default_config()
-{
-  Serial.println("Write default vaules in config");
-
-  DynamicJsonDocument json(1024);
-
-  json["long_workaround_long_workaround_long_workaround"] = "long_workaround_long_workaround_long_workaround";
-  json["mqtt_server"] = default_mqtt_server_address;
-  json["mqtt_id"] = default_mqtt_id;
-  json["mqtt_username"] = default_mqtt_username;
-  json["mqtt_password"] = default_mqtt_password;
-  json["mqtt_topic_root"] = default_mqtt_topic_root;
-
-  write_config_file(json);
-
-  Serial.println("check...");
-
-  DeserializationError error = read_config_file(json);
-  Serial.print("Config: ");
-  serializeJson(json, Serial);
-  Serial.println();
-
-  strcpy(mqtt_server_address, default_mqtt_server_address);
-  strcpy(mqtt_id, default_mqtt_id);
-  strcpy(mqtt_username, default_mqtt_username);
-  strcpy(mqtt_password, default_mqtt_password);
-  strcpy(mqtt_topic_root, default_mqtt_topic_root);
-}
-
-void setup_wifi_and_parameters()
-{
-  DynamicJsonDocument config_json(1024);
-  DeserializationError error = read_config_file(config_json);
-  Serial.print("Config: ");
-  serializeJson(config_json, Serial);
-  Serial.println();
-  if (!error)
-  {
-    Serial.println("config.json successfully parsed");
-
-    if (config_json.containsKey("mqtt_server"))
-      strcpy(mqtt_server_address, config_json["mqtt_server"]);
-    if (config_json.containsKey("mqtt_id"))
-      strcpy(mqtt_id, config_json["mqtt_id"]);
-    if (config_json.containsKey("mqtt_username"))
-      strcpy(mqtt_username, config_json["mqtt_username"]);
-    if (config_json.containsKey("mqtt_password"))
-      strcpy(mqtt_password, config_json["mqtt_password"]);
-    if (config_json.containsKey("mqtt_topic_root"))
-      strcpy(mqtt_topic_root, config_json["mqtt_topic_root"]);
-  }
-  else
-  {
-    Serial.println("Failed to load config.json. Try to write default config.json.");
-    write_default_config();
-  }
-
-  WiFi.setAutoReconnect(true);
-
-  WiFiManager wifiManager;
-
-  WiFiManagerParameter mqtt_server_parameter("mqtt_server", "MQTT Server Address", mqtt_server_address, 100);
-  wifiManager.addParameter(&mqtt_server_parameter);
-  WiFiManagerParameter mqtt_id_parameter("mqtt_id", "MQTT ID", mqtt_id, 100);
-  wifiManager.addParameter(&mqtt_id_parameter);
-  WiFiManagerParameter mqtt_username_parameter("mqtt_username", "MQTT Username", mqtt_username, 100);
-  wifiManager.addParameter(&mqtt_username_parameter);
-  WiFiManagerParameter mqtt_password_parameter("mqtt_password", "MQTT Password", mqtt_password, 100);
-  wifiManager.addParameter(&mqtt_password_parameter);
-  WiFiManagerParameter mqtt_topic_root_parameter("mqtt_topic_root", "MQTT Topic Root", mqtt_topic_root, 100);
-  wifiManager.addParameter(&mqtt_topic_root_parameter);
-
-  wifiManager.setSaveConfigCallback(saveConfigCallback);
-
-  Serial.println("Try to connect to Wifi");
-  if (!wifiManager.autoConnect("tube_lamp_setup"))
-  {
-    Serial.println("Failed to connect to Wifi! Restart in 3 seconds.");
-    delay(3000);
-    ESP.reset();
-    delay(5000);
-  }
-  Serial.println("Successfully connected to Wifi");
-
-  strcpy(mqtt_server_address, mqtt_server_parameter.getValue());
-  strcpy(mqtt_id, mqtt_id_parameter.getValue());
-  strcpy(mqtt_username, mqtt_username_parameter.getValue());
-  strcpy(mqtt_topic_root, mqtt_topic_root_parameter.getValue());
-
-  if (shouldSaveConfig)
-  {
-    DynamicJsonDocument json(1024);
-
-    json["long_workaround_long_workaround_long_workaround"] = "long_workaround_long_workaround_long_workaround";
-    json["mqtt_server"] = mqtt_server_address;
-    json["mqtt_id"] = mqtt_id;
-    json["mqtt_username"] = mqtt_username;
-    json["mqtt_password"] = mqtt_password;
-    json["mqtt_topic_root"] = mqtt_topic_root;
-
-    write_config_file(json);
-  }
 
   strcpy(mqtt_topic_mode, mqtt_topic_root);
   strcat(mqtt_topic_mode, "/mode");
@@ -361,25 +157,36 @@ void setup_wifi_and_parameters()
   strcat(mqtt_topic_flash, "/flash");
   strcpy(mqtt_topic_progress, mqtt_topic_root);
   strcat(mqtt_topic_progress, "/progress");
+
+  blink(2, true);
 }
 
-void saveConfigCallback()
+void setup_wifi()
 {
-  Serial.println("Should save config");
-  shouldSaveConfig = true;
+  WiFi.setAutoReconnect(true);
+  WiFiManager wifiManager;
+  Serial.println("Try to connect to Wifi");
+  if (!wifiManager.autoConnect("tube_lamp_setup"))
+  {
+    Serial.println("Failed to connect to Wifi! Restart in 3 seconds.");
+    delay(3000);
+    ESP.reset();
+    delay(5000);
+  }
+  Serial.println("Successfully connected to Wifi.");
 }
 
 void blink(int blinkCount, bool lamp_blink)
 {
   if (blinkCount > 0)
   {
-    digitalWrite(BUILTIN_LED, LOW);
+    digitalWrite(LED_BUILTIN, LOW);
     if (lamp_blink)
     {
       showRGB(10, 10, 10);
     }
     delay(150);
-    digitalWrite(BUILTIN_LED, HIGH);
+    digitalWrite(LED_BUILTIN, HIGH);
     if (lamp_blink)
     {
       showRGB(0, 0, 0);
@@ -867,8 +674,6 @@ void calcRainbowColors()
   Serial.println("Calculate Rainbow Colors.");
   for (int i = 0; i <= 255; i++)
   {
-    // Serial.print(i);
-    // Serial.println("/255");
     uint32_t color;
     byte WheelPos = 255 - i;
     if (WheelPos < 85)
@@ -951,8 +756,8 @@ void loop()
       else
         error_wheel_pos++;
       last_error_wheel_change = millis();
-      Serial.print("Error pos = ");
-      Serial.println(error_wheel_pos);
+      // Serial.print("Error pos = ");
+      // Serial.println(error_wheel_pos);
     }
     if (DEBUG_WDT)
       Serial.println("Before show error.");
