@@ -9,7 +9,7 @@
 #include "secrets.h"
 
 const int leds_pin = D5;
-const int switch_pin = D8;
+const int switch_pin = D1;
 const int rotary_encoder_pin1 = D7;
 const int rotary_encoder_pin2 = D6;
 
@@ -80,7 +80,7 @@ const int rotary_max = 12;
 int rot_last_pos = 0;
 
 int last_switch_triggering = -1;
-bool switch_was_triggered = false;
+bool switch_was_pressed = false;
 
 const bool DEBUG_WDT = false;
 
@@ -109,15 +109,15 @@ void showColor(int color);
 void handle_rot_encoder();
 void calcRainbowColors();
 
-void ICACHE_RAM_ATTR switch_triggered()
-{
-  long now = millis();
-  if (now - last_switch_triggering > 100)
-  {
-    last_switch_triggering = now;
-    switch_was_triggered = true;
-  }
-}
+// void ICACHE_RAM_ATTR switch_triggered()
+// {
+//   long now = millis();
+//   if (now - last_switch_triggering > 100)
+//   {
+//     last_switch_triggering = now;
+//     switch_was_pressed = true;
+//   }
+// }
 
 void setup()
 {
@@ -198,14 +198,12 @@ void blink(int blinkCount, bool lamp_blink)
 
 void init_mode_change(int new_mode)
 {
-  // current_mode = new_mode;
   String mode_message(new_mode);
   client.publish(mqtt_topic_mode, mode_message.c_str());
 }
 
 void init_color_change(int new_color)
 {
-  // current_mode = new_color;
   String color_message(new_color);
   client.publish(mqtt_topic_color, color_message.c_str());
 }
@@ -722,22 +720,22 @@ void loop()
   }
   ESP.wdtFeed();
 
-  if (switch_was_triggered)
+  if (!switch_was_pressed && !digitalRead(switch_pin))
   {
-    Serial.println("Switch triggered.");
-    if (!digitalRead(switch_pin))
-    {
-      int new_mode = current_mode + 1;
-      if (new_mode > highest_mode)
-        new_mode = lowest_mode;
-      Serial.println("Increase mode due to switch triggering.");
-      init_mode_change(new_mode);
-    }
-    else
-    {
-      Serial.println("False alarm!");
-    }
-    switch_was_triggered = false;
+    Serial.println("Switch pressed.");
+    switch_was_pressed = true;
+  }
+
+  if (switch_was_pressed && digitalRead(switch_pin))
+  {
+    
+    Serial.println("Switch released.");
+    int new_mode = current_mode + 1;
+    if (new_mode > highest_mode)
+      new_mode = lowest_mode;
+    Serial.println("Increase mode due to switch triggering.");
+    init_mode_change(new_mode);
+    switch_was_pressed = false;
   }
   // ESP.wdtFeed();
 
@@ -878,7 +876,7 @@ void loop()
   }
   // ESP.wdtFeed();
 
-  if (switch_was_triggered)
+  if (switch_was_pressed)
   {
     delay(3);
   }
