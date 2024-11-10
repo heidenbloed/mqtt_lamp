@@ -22,6 +22,7 @@ char mqtt_topic_log[100];
 
 static unsigned long last_connection_attempt = 0;
 bool connected = false;
+const int reconnect_delay = 1000;
 
 const int num_pixels = 86;
 
@@ -456,7 +457,7 @@ void setError(bool error_occured)
 void reconnect()
 {
   connected = false;
-  if (millis() - last_connection_attempt > 5000)
+  if (millis() - last_connection_attempt > reconnect_delay)
   {
     Serial.println("MQTT client is not connected. Try to reconnect.");
     setError(true);
