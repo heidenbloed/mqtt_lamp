@@ -15,6 +15,7 @@ const int rotary_encoder_pin2 = D6;
 
 char mqtt_topic_mode[100];
 char mqtt_topic_color[100];
+char mqtt_topic_hsv[100];
 char mqtt_topic_flash[100];
 char mqtt_topic_progress[100];
 char mqtt_topic_control[100];
@@ -109,6 +110,8 @@ void showRGB(int R, int G, int B);
 void showColor(int color);
 void handle_rot_encoder();
 void calcRainbowColors();
+int hsv_to_rgb(float h, float s, float v);
+int get_color_from_hsv_command(String command);
 
 // void ICACHE_RAM_ATTR switch_triggered()
 // {
@@ -150,6 +153,8 @@ void setup()
   strcat(mqtt_topic_mode, "/mode");
   strcpy(mqtt_topic_color, mqtt_topic_root);
   strcat(mqtt_topic_color, "/color");
+  strcpy(mqtt_topic_hsv, mqtt_topic_root);
+  strcat(mqtt_topic_hsv, "/hsv");
   strcpy(mqtt_topic_control, mqtt_topic_root);
   strcat(mqtt_topic_control, "/control");
   strcpy(mqtt_topic_log, mqtt_topic_root);
@@ -197,6 +202,100 @@ void blink(int blinkCount, bool lamp_blink)
   }
 }
 
+int hsv_to_rgb(float h, float s, float v)
+{
+  h = fmod(h, 360);
+  if (h < 0)
+    h += 360;
+
+  s = constrain(s, 0, 1);
+  v = constrain(v, 0, 1);
+
+  float c = v * s;
+  float x = c * (1 - fabs(fmod(h / 60.0, 2) - 1));
+  float m = v - c;
+
+  float r_f, g_f, b_f;
+
+  if (h < 60)
+  {
+    r_f = c;
+    g_f = x;
+    b_f = 0;
+  }
+  else if (h < 120)
+  {
+    r_f = x;
+    g_f = c;
+    b_f = 0;
+  }
+  else if (h < 180)
+  {
+    r_f = 0;
+    g_f = c;
+    b_f = x;
+  }
+  else if (h < 240)
+  {
+    r_f = 0;
+    g_f = x;
+    b_f = c;
+  }
+  else if (h < 300)
+  {
+    r_f = x;
+    g_f = 0;
+    b_f = c;
+  }
+  else
+  {
+    r_f = c;
+    g_f = 0;
+    b_f = x;
+  }
+
+  uint8_t r = (r_f + m) * 255;
+  uint8_t g = (g_f + m) * 255;
+  uint8_t b = (b_f + m) * 255;
+
+  return r * 256 * 256 + g * 256 + b;
+}
+
+int get_color_from_hsv_command(String hsv_command)
+{
+  int first_comma_idx = hsv_command.indexOf(",");
+  if (first_comma_idx > 0)
+  {
+    String h_command = hsv_command.substring(0, first_comma_idx);
+    float h = h_command.toFloat();
+    String sv_command = hsv_command.substring(first_comma_idx + 1);
+    int second_comma_idx = sv_command.indexOf(",");
+    if (second_comma_idx > 0)
+    {
+      String s_command = sv_command.substring(0, second_comma_idx);
+      String v_command = sv_command.substring(second_comma_idx + 1);
+      float s = s_command.toFloat();
+      float v = v_command.toFloat();
+
+      String log_message("[HSV] H=");
+      log_message.concat(h);
+      log_message.concat(" S=");
+      log_message.concat(s);
+      log_message.concat(" V=");
+      log_message.concat(v);
+      Serial.println(log_message);
+      client.publish(mqtt_topic_log, log_message.c_str());
+
+      return hsv_to_rgb(h, s, v);
+    }
+  }
+
+  Serial.println("Invalid hsv command.");
+  String log_message("[HSV] Invalid hsv command");
+  client.publish(mqtt_topic_log, log_message.c_str());
+  return 0;
+}
+
 void init_mode_change(int new_mode)
 {
   String mode_message(new_mode);
@@ -213,6 +312,12 @@ void init_gray_shade(float whiteness)
 {
   int shade = 255 * whiteness;
   int color = shade + shade * 256 + shade * 256 * 256;
+  init_color_change(color);
+}
+
+void init_warm_shade(float brightness)
+{
+  int color = hsv_to_rgb(25.0, 0.97, brightness);
   init_color_change(color);
 }
 
@@ -247,6 +352,17 @@ void mqtt_callback(char *topicChar, byte *payload, unsigned int length)
     // current_mode = MODE_NORMAL;
     // String mode_message("1");
     // client.publish(mqtt_topic_mode,mode_message.c_str());
+    init_mode_change(MODE_NORMAL);
+  }
+  if (topic.equals(mqtt_topic_hsv))
+  {
+    Serial.println("Change the hsv color of the lamp and set mode to NORMAL");
+
+    current_color = get_color_from_hsv_command(command);
+
+    String log_message("[HSV] New hsv color has been set");
+    client.publish(mqtt_topic_log, log_message.c_str());
+
     init_mode_change(MODE_NORMAL);
   }
   if (topic.equals(mqtt_topic_flash))
@@ -475,35 +591,45 @@ void reconnect()
         Serial.println("Subscribe to color topic");
         if (client.subscribe(mqtt_topic_color))
         {
-          Serial.println("Subscribe to mode topic");
-          if (client.subscribe(mqtt_topic_mode))
+          Serial.println("Subscribe to hsv topic");
+          if (client.subscribe(mqtt_topic_hsv))
           {
-            Serial.println("Subscribe to flash topic");
-            if (client.subscribe(mqtt_topic_flash))
+            Serial.println("Subscribe to mode topic");
+            if (client.subscribe(mqtt_topic_mode))
             {
-              Serial.println("Subscribe to progress topic");
-              if (client.subscribe(mqtt_topic_progress))
+              Serial.println("Subscribe to flash topic");
+              if (client.subscribe(mqtt_topic_flash))
               {
-                setError(false);
-                connected = true;
+                Serial.println("Subscribe to progress topic");
+                if (client.subscribe(mqtt_topic_progress))
+                {
+                  setError(false);
+                  connected = true;
+                }
+                else
+                {
+                  Serial.print("Failed to subscribe to progress topic, current state = ");
+                  Serial.println(client.state());
+                  Serial.println("Try to reconnect in 5 seconds");
+                }
               }
               else
               {
-                Serial.print("Failed to subscribe to progress topic, current state = ");
+                Serial.print("Failed to subscribe to flash topic, current state = ");
                 Serial.println(client.state());
                 Serial.println("Try to reconnect in 5 seconds");
               }
             }
             else
             {
-              Serial.print("Failed to subscribe to flash topic, current state = ");
+              Serial.print("Failed to subscribe to mode topic, current state = ");
               Serial.println(client.state());
               Serial.println("Try to reconnect in 5 seconds");
             }
           }
           else
           {
-            Serial.print("Failed to subscribe to mode topic, current state = ");
+            Serial.print("Failed to subscribe to hsv topic, current state = ");
             Serial.println(client.state());
             Serial.println("Try to reconnect in 5 seconds");
           }
@@ -664,7 +790,7 @@ void handle_rot_encoder()
     Serial.print("Rotary encoder is set to ");
     Serial.print((int)relative_pos * 100);
     Serial.println("%");
-    init_gray_shade(relative_pos);
+    init_warm_shade(relative_pos);
   }
 }
 
@@ -729,7 +855,7 @@ void loop()
 
   if (switch_was_pressed && digitalRead(switch_pin))
   {
-    
+
     Serial.println("Switch released.");
     int new_mode = current_mode + 1;
     if (new_mode > highest_mode)
